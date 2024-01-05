@@ -5,50 +5,46 @@
 
 -record(song, {idx, path, description, lastplay, playcount, rating}).
 
-% TODO X THIS COULD BE USER CONFIG SETTINGS
+% TODO -- X THIS COULD BE USER CONFIG SETTINGS --
 -define(CHAOS_FACTOR, 2.0).
 -define(MIN_GOOD_PERC, 30).
-
-% TODO X PODCAST CONFIG SEEMS TO BE EFFECITVELY THE FOLLOWING
-% -> podget config directory
-% -> podget configured output directory [could parse from podget config!]
-
-% TODO X FINALLY THE CONFIG FILE `gmbrc` path should be given
+-define(DEFAULT_SCHEDULE, 60).
+-define(AWAIT_SONG_PLAYBACK, 60000).
+% TODO TESTING ONLY REVERT TO 10 ONCE OK
+-define(PODCAST_EVERY, 3).
+% TODO -- END CONFIG SETTINGS --
 
 % TODO would be nice if we were to use the default as
 %      configured in gmusicbrowser
 -define(DEFAULT_RATING, 60).
 
-% -> maybe since this is just four parameters we could have defaults and user
-%    arguments --chaos-factor= --min-good-perc= --gmbrc=... --podget-config-dir=...
-%    [--control-gmusicbrowser-lifecycle]
-% -> maybe not because some optional things like gmusicbrwoser executable config
-%    come to mind?
-
 %---------------------------------------------------------------[ Entrypoint ]--
 main([]) ->
 	% TODO PROCESS PER CONFIG FILE OR SOMETHING
 	database_read("/home/linux-fan/.config/gmusicbrowser/gmbrc"),
-	% TODO LOOP INDEFINITELY AND ALSO INTEGRATE WITH PODCAST
-	Schedule = schedule_compute(60),
-	playback_blocking(Schedule),
+	mainloop(playback_init(schedule_compute(?DEFAULT_SCHEDULE)),
+		1,
+		% TODO MAKE THIS CONFIGURABLE
+		podcast_init("/data/programs/music2/supplementary/news/conf",
+			"/data/programs/music2/supplementary/news/pod")),
 	ets:delete(gmusicradio_songs).
 
-% -- TODO NOTES --
-%  - To play a given file `gmusicbrowser -enqueue PATH`
-%  - To check what is being played: 
-%    dbus-send --print-reply --dest=org.gmusicbrowser /org/gmusicbrowser org.gmusicbrowser.CurrentSong
-%    dbus-monitor --profile interface=org.gmusicbrowser,member=SongChanged
+% Endless loop processing
+mainloop({finish, Next, none, _}, Ctr, PodcastState) ->
+	[H|T] = schedule_compute(?DEFAULT_SCHEDULE),
+	mainloop({await, Next, H, T}, Ctr + 1, PodcastState);
+mainloop(PlaybackState={await, _, _, _}, Ctr, PodcastState) ->
+	timer:sleep(?AWAIT_SONG_PLAYBACK),
+	NewPodcastState = case (Ctr rem ?PODCAST_EVERY) == 0 of
+			true  -> podcast_process(PodcastState);
+			false -> PodcastState
+			end,
+	StateNew = playback_continue(PlaybackState),
+	mainloop(StateNew, Ctr + 1, NewPodcastState).
+
+% TODO USE Erlang open_port({spawn_executable, BINARY}, [{args, [arg0, arg1, ...]}, {..see link..}])
 % + https://erlang.org/pipermail/erlang-questions/2007-February/025210.html
-% emits “SongChanged” line once for each song
-% $ dbus-monitor --profile interface=org.gmusicbrowser,member=SongChanged
-% #type	timestamp	serial	sender	destination	path	interface	member
-% #					in_reply_to
-% sig	1704403082.100347	2	org.freedesktop.DBus	:1.25	/org/freedesktop/DBus	org.freedesktop.DBus	NameAcquired
-% sig	1704403082.100356	4	org.freedesktop.DBus	:1.25	/org/freedesktop/DBus	org.freedesktop.DBus	NameLost
-% sig	1704403326.727144	246	:1.10	<none>	/org/gmusicbrowser	org.gmusicbrowser	SongChanged
-% sig	1704403588.375003	251	:1.10	<none>	/org/gmusicbrowser	org.gmusicbrowser	SongChanged
-% -- END NOTES --
+% find it in path, then use these primitives to run a subprocess
 
 %------------------------------------------------------------[ GMBRC Parsing ]--
 % Reads the songs from the GMBRC and stores them in ets table `songs` by idx key
@@ -188,20 +184,27 @@ schedule_merge_annotated(Schedule, Limit, AnnotatedGroups) ->
 	end.
 
 %-----------------------------------------------------[ Playback Integration ]--
-playback_blocking([H1|[H2|ScheduleT]]) ->
+playback_init([H1|[H2|ScheduleT]]) ->
 	ok = playback_enqueue(H1),
-	ok = playback_enqueue(H2),
-	ok = playback_await(H1),
-	playback_blocking_inner(H2, ScheduleT).
+	%ok = playback_enqueue(H2), % TODO TEST
+	{await, H1, H2, ScheduleT}.
 
-% TODO THIS IS INCOMPLETE BECAUSE IT SHOULD BETTER ENQUEUE THE H1 AND THEN RETURN (WITHOUT AWAITING) SUCH THAT PROCESSING CAN TAKE ITS TIME FOR ONE SONG LENGTH AND ALSO SUBSEQUENT INVOCATIONS WOULD PASS THE RETURN VALUE AS “AWAIT” TO playback_blocking_inner. Effectively, only the first call would go to playback_blocking. This is all moot such as long as we don't know the integration of the podcasting yet...
-playback_blocking_inner(Await, [H1|[]]) ->
-	ok = playback_await(Await),
-	H1;
-playback_blocking_inner(Await, [H2|ScheduleT]) ->
-	ok = playback_await(Await),
-	ok = playback_enqueue(H2),
-	playback_blocking_inner(H2, ScheduleT).
+playback_continue({await, Await, Next, Sched}) ->
+	case playback_check_is_running(Await) of
+	true ->
+		[Entry] = ets:lookup(gmusicradio_songs, Await),
+		io:fwrite("FOUND   ~ts~n", [Entry#song.description]),
+		% update playcount
+		ets:insert(gmusicradio_songs, Entry#song{
+					playcount = Entry#song.playcount + 1}),
+		playback_enqueue(Next),
+		case Sched of
+		[]    -> {finish, Next, none, []};
+		[H|T] -> {await,  Next, H,    T}
+		end;
+	false ->
+		{await, Await, Next, Sched}
+	end.
 
 playback_enqueue(ID) ->
 	[Entry] = ets:lookup(gmusicradio_songs, ID),
@@ -210,7 +213,7 @@ playback_enqueue(ID) ->
 	os:cmd(io_lib:format("gmusicbrowser -enqueue ~s", [Entry#song.path])),
 	ok.
 
-playback_await(ID) ->
+playback_check_is_running(ID) ->
 	[Entry] = ets:lookup(gmusicradio_songs, ID),
 	io:fwrite("AWAIT   ~ts~n", [Entry#song.description]),
 	RawStatus = os:cmd("dbus-send --print-reply " ++
@@ -228,24 +231,14 @@ playback_await(ID) ->
 		error;
 	false ->
 		CMP = binary:list_to_bin(filename:join(Path, File)),
-		case CMP == Entry#song.path of
-		true ->
-			io:fwrite("FOUND   ~ts~n", [Entry#song.description]),
-			% update playcount
-			ets:insert(gmusicradio_songs, Entry#song{
-					playcount = Entry#song.playcount + 1}),
-			ok;
-		false ->
-			timer:sleep(60000), % TODO LATER UP THIS TO 1min!
-			playback_await(ID)
-		end
+		CMP == Entry#song.path
 	end.
 
-playback_get_dict_entry(Entry, []) ->
+playback_get_dict_entry(_Entry, []) ->
 	notfound;
 playback_get_dict_entry(Entry, ["dict entry("|Tail]) ->
 	playback_check_dict_key(Entry, Tail);
-playback_get_dict_entry(Entry, [Skip|Tail]) ->
+playback_get_dict_entry(Entry, [_Skip|Tail]) ->
 	playback_get_dict_entry(Entry, Tail).
 
 playback_check_dict_key(Entry, [KeyLine|[ValueLine|Others]]) ->
@@ -256,3 +249,19 @@ playback_check_dict_key(Entry, [KeyLine|[ValueLine|Others]]) ->
 	end.
 
 %------------------------------------------------------[ Podcast Interaction ]--
+
+podcast_init(ConfigDir, OutputDir) ->
+	% TODO SUBPROCESS NO EXIT CODE HANDLING AND NO SPACES SUPPORT
+	os:cmd("podget -d " ++ ConfigDir),
+	{ConfigDir, OutputDir, lists:sort(filelib:wildcard(OutputDir ++ "/**/*.mp3"))}.
+
+podcast_process({ConfigDir, OutputDir, OldState}) ->
+	os:cmd("podget -d " ++ ConfigDir), % TODO SUBPROCESS WARNING
+	NewState = lists:sort(filelib:wildcard(OutputDir ++ "/**/*.mp3")),
+	case NewState -- OldState of
+	[] -> ok; % do nothing
+	NewFiles ->
+		PlayFile = lists:last(NewFiles),
+		io:fwrite("New podcast entries: ~p~n", [PlayFile])
+	end,
+	{ConfigDir, OutputDir, NewState}.
