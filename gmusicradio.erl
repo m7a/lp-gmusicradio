@@ -10,6 +10,8 @@
 % the-fly to continue playback.
 
 main([]) ->
+	io:fwrite("Ma_Sys.ma gmusicradio 1.0.0 (c) " ++
+					"2024 Ma_Sys.ma <info@masysma.net>~n"),
 	Conf = main_read_config(),
 	database_read(maps:get(gmbrc, Conf), maps:get(default_rating, Conf)),
 	main_loop(Conf, playback_init(schedule_compute(Conf),
@@ -31,7 +33,7 @@ main_read_config() ->
 		gmbrc           => filename:join([UserHome, ".config",
 						"gmusicbrowser", "gmbrc"]),
 		podcast_chck    => 10,
-		await_ms        => 40000,
+		await_ms        => 60000,
 		cmd_timeout     => 10000,
 		schedule_len    => 60,
 		chaos_factor    => 2.0,
