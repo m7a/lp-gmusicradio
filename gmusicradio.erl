@@ -4,9 +4,6 @@
 -include_lib("stdlib/include/ms_transform.hrl").
 -record(song, {idx, path, description, lastplay, playcount, rating}).
 
-% TODO LIFECYCLE FEATURE IS STILL A THING. SPECIFICALLY, IF ENQUEUE STARTS THE
-%      PROGRAM IT BLOCKS, MAYBE ADD A TIMEOUT OR FIX THE LIFECYCLE AND ITS OK?
-
 %---------------------------------------------------------------[ Entrypoint ]--
 % Parse Config, Run a mainloop that alternates between song and podcast playback
 % When the initially generated schedule is exhausted, a new one is generated on-
@@ -15,7 +12,8 @@
 main([]) ->
 	Conf = main_read_config(),
 	database_read(maps:get(gmbrc, Conf), maps:get(default_rating, Conf)),
-	main_loop(Conf, playback_init(schedule_compute(Conf)), 1,
+	main_loop(Conf, playback_init(schedule_compute(Conf),
+				maps:get(cmd_timeout, Conf)), 1,
 			podcast_init(Conf)),
 	ets:delete(gmusicradio_songs).
 
@@ -29,14 +27,16 @@ main_read_config() ->
 	ConfDefault = #{
 		podcast_conf => "/data/programs/music2/supplementary/news/conf",
 		podcast_dir  => "/data/programs/music2/supplementary/news/pod",
-		gmbrc          => filename:join([UserHome, ".config",
+		podcast_timeout => 30000,
+		gmbrc           => filename:join([UserHome, ".config",
 						"gmusicbrowser", "gmbrc"]),
-		podcast_chck   => 10,
-		schedule_len   => 60,
-		await_ms       => 30000,
-		chaos_factor   => 2.0,
-		min_good_perc  => 30,
-		default_rating => 60
+		podcast_chck    => 10,
+		await_ms        => 40000,
+		cmd_timeout     => 10000,
+		schedule_len    => 60,
+		chaos_factor    => 2.0,
+		min_good_perc   => 30,
+		default_rating  => 60
 	},
 	case file:read_file_info(ConfFile) of
 	{ok, _FileInfo} ->
@@ -45,8 +45,9 @@ main_read_config() ->
 		{gmusicradio, NewConf, _} = xmerl_lib:simplify_element(Element),
 		maps:map(fun({Key, OldValue}) ->
 			case proplists:get_value(Key, NewConf) of
-			undefined -> OldValue;
-			Value     ->
+			undefined ->
+				OldValue;
+			Value ->
 				if
 				is_integer(OldValue) -> list_to_integer(Value);
 				is_float(OldValue)   -> list_to_float(Value);
@@ -69,7 +70,8 @@ main_loop(Conf, PlaybackState={await, _, _, _}, Ctr, PodcastState) ->
 			true  -> podcast_process(PodcastState);
 			false -> PodcastState
 			end,
-	StateNew = playback_continue(PlaybackState),
+	StateNew = playback_continue(PlaybackState,
+						maps:get(cmd_timeout, Conf)),
 	main_loop(Conf, StateNew, Ctr + 1, NewPodcastState).
 
 %------------------------------------------------------------[ GMBRC Parsing ]--
@@ -109,7 +111,7 @@ database_convert_store(DefaultRating, L) ->
 		idx=Idx,
 		path=filename:join(database_keyfind(<<"path">>, L),	
 					database_keyfind(<<"file">>, L)),
-		description=io_lib:format("~ts ~ts ~ts (~ts)", [
+		description=io_lib:format("~s ~s ~s (~s)", [
 			database_utf8p(10, database_keyfind(<<"artist">>, L)),
 			database_utf8p(20, database_keyfind(<<"album">>,  L)),
 			database_utf8p(20, database_keyfind(<<"title">>,  L)),
@@ -128,20 +130,16 @@ database_keyfind(Key, List) ->
 	{_K, Value} = lists:keyfind(Key, 1, List),
 	Value.
 
-% UTF-8 aware padding method. By experimentation, the following was determined:
-%  - string manipulation and lengths are only valid for the unprocessed input
-%  - Direct output with ~ts is invalid when `Str` contains UTF-8 characters
-%    which are not in latin1 (it works for german umlaute, though)
-%  - Conversion using unicode:characters_to_binary is necessary for non-latin1-
-%    contained unicode values.
+% UTF-8 aware padding method. The trick to unicode processing in erlang seems
+% to be: Disregard explicit encoding and let the `string:`-functions detect it
+% themselves. Then everything works. io_lib:format("~-10ts") and variations
+% thereof do not work hence do the padding manually.
 database_utf8p(Pad, Str) ->
 	SL = string:length(Str),
 	case SL > Pad of
-	true  -> unicode:characters_to_binary(bitstring_to_list(
-					string:slice(Str, 0, Pad)), utf8);
-	false -> io_lib:format("~ts~" ++ integer_to_list(Pad - SL) ++ "s",
-					[unicode:characters_to_binary(
-					bitstring_to_list(Str), utf8), ""])
+	true  -> string:slice(Str, 0, Pad);
+	false -> io_lib:format("~s~" ++ integer_to_list(Pad - SL) ++ "s",
+								[Str, ""])
 	end.
 
 %-----------------------------------------------------[ Schedule Computation ]--
@@ -191,7 +189,7 @@ schedule_compute(Conf) ->
 	io:fwrite("Schedule of ~w songs:~n", [length(Schedule)]),
 	lists:foreach(fun(ID) ->
 			[Entry] = ets:lookup(gmusicradio_songs, ID),
-			io:fwrite("I~5w R~w C~5w ~ts~n", [Entry#song.idx,
+			io:fwrite("I~5w R~w C~5w ~s~n", [Entry#song.idx,
 				Entry#song.rating, Entry#song.playcount,
 				Entry#song.description])
 		end, Schedule),
@@ -243,19 +241,19 @@ schedule_merge_annotated(Schedule, Limit, AnnotatedGroups) ->
 % other songs into consideration compared to the ones that it produced in the
 % preceding playlist (if that list was actually played that is).
 
-playback_init([H1|[H2|ScheduleT]]) ->
-	{ok, _Cnt} = playback_enqueue(H1),
+playback_init([H1|[H2|ScheduleT]], CmdTimeout) ->
+	playback_enqueue(H1, CmdTimeout),
 	{await, H1, H2, ScheduleT}.
 
-playback_continue({await, Await, Next, Sched}) ->
+playback_continue({await, Await, Next, Sched}, CmdTimeout) ->
 	case playback_check_is_running(Await) of
 	true ->
 		[Entry] = ets:lookup(gmusicradio_songs, Await),
-		io:fwrite("FOUND   ~ts~n", [Entry#song.description]),
+		io:fwrite("FOUND   ~s~n", [Entry#song.description]),
 		% update playcount
 		ets:insert(gmusicradio_songs, Entry#song{
 					playcount = Entry#song.playcount + 1}),
-		playback_enqueue(Next),
+		playback_enqueue(Next, CmdTimeout),
 		case Sched of
 		[]    -> {finish, Next, none, []};
 		[H|T] -> {await,  Next, H,    T}
@@ -264,20 +262,32 @@ playback_continue({await, Await, Next, Sched}) ->
 		{await, Await, Next, Sched}
 	end.
 
-playback_enqueue(ID) ->
+playback_enqueue(ID, CmdTimeout) ->
 	[Entry] = ets:lookup(gmusicradio_songs, ID),
-	io:fwrite("ENQUEUE ~ts~n", [Entry#song.description]),
-	playback_enqueue_file(Entry#song.path).
+	io:fwrite("ENQUEUE ~s~n", [Entry#song.description]),
+	playback_enqueue_file(Entry#song.path, CmdTimeout).
 
-playback_enqueue_file(File) ->
-	{ok, _Cnt} = subprocess_run_await(["gmusicbrowser", "-enqueue", File]).
+playback_enqueue_file(File, CmdTimeout) ->
+	case subprocess_run_await(["gmusicbrowser", "-enqueue", File],
+							CmdTimeout, detach) of
+	{timeout, _Cnt} ->
+		% if timeout of 10sec expires it is quite likely that we started
+		% the gmusicbrowser ourselves. This means it may not be playing
+		% correctly yet, so start it.
+		{ok, _Cnt2} = subprocess_run_await(["gmusicbrowser", "-cmd",
+							"Play"], 20000, error);
+	{ok, _Cnt3} ->
+		ok
+	end.
 
 playback_check_is_running(ID) ->
 	[Entry] = ets:lookup(gmusicradio_songs, ID),
-	io:fwrite("AWAIT   ~ts~n", [Entry#song.description]),
+	io:fwrite("AWAIT   ~s~n", [Entry#song.description]),
+	% if dbus send takes more than 10sec something is seriously off
 	{ok, RawStatus} = subprocess_run_await(["dbus-send",
 			"--print-reply", "--dest=org.gmusicbrowser",
-			"/org/gmusicbrowser", "org.gmusicbrowser.CurrentSong"]),
+			"/org/gmusicbrowser", "org.gmusicbrowser.CurrentSong"],
+			10000, error),
 	% path, file is of interest
 	Lines = lists:map(fun string:trim/1,
 					string:split(RawStatus, "\n", all)),
@@ -316,7 +326,8 @@ podcast_init(Conf) ->
 
 podcast_run_inner(Conf) ->
 	{ok, _Cnt} = subprocess_run_await(["podget", "-d",
-					maps:get(podcast_conf, Conf)]),
+				maps:get(podcast_conf, Conf)],
+				maps:get(podcast_timeout, Conf), error),
 	lists:sort(filelib:wildcard(maps:get(podcast_dir, Conf) ++
 								"/**/*.mp3")).
 
@@ -327,31 +338,56 @@ podcast_process({Conf, OldState}) ->
 		ok; % do nothing
 	NewFiles ->
 		PlayFile = lists:last(NewFiles),
-		io:fwrite("PODCAST ~ts~n", [PlayFile]),
-		playback_enqueue_file(PlayFile)
+		io:fwrite("PODCAST ~s~n", [PlayFile]),
+		playback_enqueue_file(PlayFile, maps:get(cmd_timeout, Conf))
 	end,
 	{Conf, NewState}.
 
 %-------------------------------------------------------[ Subprocess Library ]--
 % Enables the spawning of a subprocess with checking its output and return code
 % and using the shell and space safe way of giving the command as a list of
-% parts rather than a shell script...
-
+% parts rather than a shell script. The implementation is inspired by this
+% mailing list entry:
 % https://erlang.org/pipermail/erlang-questions/2007-February/025210.html
-subprocess_run_await([ExecutableName|Args]) ->
-	subprocess_get_data(open_port(
-			{spawn_executable, os:find_executable(ExecutableName)},
-			[{args, Args}, stream, exit_status,
-					use_stdio, stderr_to_stdout, in]
-		), []).
 
-subprocess_get_data(Port, Acc) ->
+% TimeoutAction := error or detach
+subprocess_run_await([ExecutableName|Args], Timeout, TimeoutAction) ->
+	Port = open_port({spawn_executable, os:find_executable(ExecutableName)},
+			[{args, Args}, stream, exit_status,
+					use_stdio, stderr_to_stdout, in]),
+	{ok, Timer} = timer:send_after(Timeout, {Port,
+						{timeout, TimeoutAction}}),
+	subprocess_get_data(Timer, Port, []).
+
+subprocess_get_data(Timer, Port, Acc) ->
 	receive
+	{Port, {timeout, detach}} ->
+		{timeout, lists:reverse(Acc)};
+	{Port, {timeout, error}} ->
+		port_close(Port),
+		{error, timeout, lists:reverse(Acc)};
 	{Port, {data, D}} ->
-		subprocess_get_data(Port, [D|Acc]);
+		subprocess_get_data(Timer, Port, [D|Acc]);
 	{Port, {exit_status, RC}} ->
+		% Race Condition: If the timer fires just after the exit status
+		% but before we can cancel it here, then the message
+		% {timeout, ...} is going to be ignored and processed upon
+		% the next subprocess interaction (see subprocess_run_await)
+		timer:cancel(Timer),
 		case RC == 0 of
 		true  -> {ok, lists:reverse(Acc)};
 		false -> {error, RC, lists:reverse(Acc)}
-		end
+		end;
+	% Since we can have detached processes it may be the case that some
+	% other process is still sending us messages. e.g. if its timer was
+	% not cancelled correctly due to race condition or if the program was
+	% detached to background and is now printing stuff to console or
+	% exiting. This block catches all of these instances and drops their
+	% data.
+	{_Other, {timeout, _Setting}} ->
+		subprocess_get_data(Timer, Port, Acc);
+	{_Other, {data, _Data}} ->
+		subprocess_get_data(Timer, Port, Acc);
+	{_Other, {exit_status, _RC}} ->
+		subprocess_get_data(Timer, Port, Acc)
 	end.
