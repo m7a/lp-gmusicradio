@@ -2,51 +2,60 @@
 %% -*- erlang -*-
 -mode(compile).
 -include_lib("stdlib/include/ms_transform.hrl").
-
 -record(song, {idx, path, description, lastplay, playcount, rating}).
 
-% TODO ADD COMMENTS TO SECTIONS.
-% TODO CONSIDER ADDING LIFECYCLE FEATURE
-% TODO UNICODE BUG
+% TODO LIFECYCLE FEATURE IS STILL A THING. SPECIFICALLY, IF ENQUEUE STARTS THE
+%      PROGRAM IT BLOCKS, MAYBE ADD A TIMEOUT OR FIX THE LIFECYCLE AND ITS OK?
 
 %---------------------------------------------------------------[ Entrypoint ]--
+% Parse Config, Run a mainloop that alternates between song and podcast playback
+% When the initially generated schedule is exhausted, a new one is generated on-
+% the-fly to continue playback.
+
 main([]) ->
 	Conf = main_read_config(),
-	database_read(dict:fetch(gmbrc, Conf),
-					dict:fetch(default_rating, Conf)),
+	database_read(maps:get(gmbrc, Conf), maps:get(default_rating, Conf)),
 	main_loop(Conf, playback_init(schedule_compute(Conf)), 1,
 			podcast_init(Conf)),
 	ets:delete(gmusicradio_songs).
 
 main_read_config() ->
 	{ok, UserHome} = init:get_argument(home),
-	ConfFile = filename:join(UserHome, ".mdvl/gmusicradio_config.erl"),
+	ConfFile = filename:join(UserHome, ".mdvl/gmusicradio.xml"),
 	% For podcast_dir  and default_rating the values could be parsed from
 	%     podcast_conf and gmbrc respectively. This is more complicated than
 	% stating them explicitly here. Hence, the less-complicated explicit
 	% implementation is provided here.
-	ConfDefault = dict:from_list([
-		{podcast_conf, "/data/programs/music2/supplementary/news/conf"},
-		{podcast_dir,  "/data/programs/music2/supplementary/news/pod"},
-		{gmbrc,        filename:join([UserHome, ".config",
-						"gmusicbrowser", "gmbrc"])},
-		{podcast_chck,   10},
-		{schedule_len,   60},
-		{await_ms,       60000},
-		{chaos_factor,   2.0},
-		{min_good_perc,  30},
-		{default_rating, 60}
-	]),
+	ConfDefault = #{
+		podcast_conf => "/data/programs/music2/supplementary/news/conf",
+		podcast_dir  => "/data/programs/music2/supplementary/news/pod",
+		gmbrc          => filename:join([UserHome, ".config",
+						"gmusicbrowser", "gmbrc"]),
+		podcast_chck   => 10,
+		schedule_len   => 60,
+		await_ms       => 30000,
+		chaos_factor   => 2.0,
+		min_good_perc  => 30,
+		default_rating => 60
+	},
 	case file:read_file_info(ConfFile) of
 	{ok, _FileInfo} ->
-		{ok, NewConf} = file:consult(ConfFile),
-		dict:map(fun({Key, OldValue}) ->
-				case dict:is_key(Key, NewConf) of
-				true  -> dict:lookup(Key, NewConf);
-				false -> OldValue
+		% Config File <gmusicradio podcast_conf="/data/program..." .../>
+		{Element, _} = xmerl_scan:file(ConfFile),
+		{gmusicradio, NewConf, _} = xmerl_lib:simplify_element(Element),
+		maps:map(fun({Key, OldValue}) ->
+			case proplists:get_value(Key, NewConf) of
+			undefined -> OldValue;
+			Value     ->
+				if
+				is_integer(OldValue) -> list_to_integer(Value);
+				is_float(OldValue)   -> list_to_float(Value);
+				true                 -> Value
 				end
-			end, ConfDefault);
-	{error, _} ->
+			end
+		end, ConfDefault);
+	{error, enoent} ->
+		% Use defaults if conf file absent
 		ConfDefault
 	end.
 
@@ -55,8 +64,8 @@ main_loop(Conf, {finish, Next, none, _}, Ctr, PodcastState) ->
 	[H|T] = schedule_compute(Conf),
 	main_loop(Conf, {await, Next, H, T}, Ctr + 1, PodcastState);
 main_loop(Conf, PlaybackState={await, _, _, _}, Ctr, PodcastState) ->
-	timer:sleep(dict:fetch(await_ms, Conf)),
-	NewPodcastState = case (Ctr rem dict:fetch(podcast_chck, Conf)) == 0 of
+	timer:sleep(maps:get(await_ms, Conf)),
+	NewPodcastState = case (Ctr rem maps:get(podcast_chck, Conf)) == 0 of
 			true  -> podcast_process(PodcastState);
 			false -> PodcastState
 			end,
@@ -64,7 +73,8 @@ main_loop(Conf, PlaybackState={await, _, _, _}, Ctr, PodcastState) ->
 	main_loop(Conf, StateNew, Ctr + 1, NewPodcastState).
 
 %------------------------------------------------------------[ GMBRC Parsing ]--
-% Reads the songs from the GMBRC and stores them in ets table `songs` by idx key
+% Reads the songs, ratings and play counts from the GMBRC and stores them in ets
+% table `gmusicradio_songs` by idx key.
 
 database_read(GMBRC, DefaultRating) ->
 	io:fwrite("Read GMBRC... "),
@@ -118,23 +128,34 @@ database_keyfind(Key, List) ->
 	{_K, Value} = lists:keyfind(Key, 1, List),
 	Value.
 
-% TODO THIS UNICODE PART DOES NOT WORK YET...
-database_utf8p(Pad, Binary) ->
-	Primary = unicode:characters_to_binary(bitstring_to_list(Binary), utf8),
-	Len = string:length(Primary),
-	io:fwrite("str=<~p> len=<~p>~n", [Primary, Len]),
-	case Len > Pad of
-	true ->
-		string:slice(Primary, 0, Pad);
-	false ->
-		[Primary|lists:map(fun(_X) -> " " end, lists:seq(1, Pad - Len))]
+% UTF-8 aware padding method. By experimentation, the following was determined:
+%  - string manipulation and lengths are only valid for the unprocessed input
+%  - Direct output with ~ts is invalid when `Str` contains UTF-8 characters
+%    which are not in latin1 (it works for german umlaute, though)
+%  - Conversion using unicode:characters_to_binary is necessary for non-latin1-
+%    contained unicode values.
+database_utf8p(Pad, Str) ->
+	SL = string:length(Str),
+	case SL > Pad of
+	true  -> unicode:characters_to_binary(bitstring_to_list(
+					string:slice(Str, 0, Pad)), utf8);
+	false -> io_lib:format("~ts~" ++ integer_to_list(Pad - SL) ++ "s",
+					[unicode:characters_to_binary(
+					bitstring_to_list(Str), utf8), ""])
 	end.
 
 %-----------------------------------------------------[ Schedule Computation ]--
+% Compute a Music Schedule according to the following algorithm:
+% Partition songs by rating, drop all 1-star rated songs, shuffle the per-rating
+% lists, sort them by play count ASC, ensure that 4+5 stars are at least 30%
+% (if not, repeat them as necessary) and then interleave the lists as to produce
+% a fair playlist with enough good songs. Ordering by play count ensures that
+% repeated execution of the same algorithm always yields diverse playlists.
+
 schedule_compute(Conf) ->
-	MinGoodPerc = dict:fetch(min_good_perc, Conf),
-	ChaosFactor = dict:fetch(chaos_factor,  Conf),
-	ScheduleLen = dict:fetch(schedule_len,  Conf),
+	MinGoodPerc = maps:get(min_good_perc, Conf),
+	ChaosFactor = maps:get(chaos_factor,  Conf),
+	ScheduleLen = maps:get(schedule_len,  Conf),
 	% unclear why select_count did not return the intended output here?
 	Count1 = length(ets:select(gmusicradio_songs,
 						schedule_construct_match(0))),
@@ -215,6 +236,13 @@ schedule_merge_annotated(Schedule, Limit, AnnotatedGroups) ->
 	end.
 
 %-----------------------------------------------------[ Playback Integration ]--
+% Playback uses gmusicbrowser enqueue function and then checks whether that song
+% has really arrived at playback before enqueuing the next song. A song that is
+% recognized as currently playing gets its play count incremented such that the
+% schedule generation has accurate data to rely on and “continues” by taking
+% other songs into consideration compared to the ones that it produced in the
+% preceding playlist (if that list was actually played that is).
+
 playback_init([H1|[H2|ScheduleT]]) ->
 	{ok, _Cnt} = playback_enqueue(H1),
 	{await, H1, H2, ScheduleT}.
@@ -279,13 +307,17 @@ playback_check_dict_key(Entry, [KeyLine|[ValueLine|Others]]) ->
 	end.
 
 %------------------------------------------------------[ Podcast Interaction ]--
+% Podcast integration works by calling podget -d and then scanning the
+% configured podcast directory tree for newly added .mp3 files. If any are
+% found, the last (i.e. most recent) one is enqueued for playback.
+
 podcast_init(Conf) ->
 	{Conf, podcast_run_inner(Conf)}.
 
 podcast_run_inner(Conf) ->
 	{ok, _Cnt} = subprocess_run_await(["podget", "-d",
-					dict:fetch(podcast_conf, Conf)]),
-	lists:sort(filelib:wildcard(dict:fetch(podcast_dir, Conf) ++
+					maps:get(podcast_conf, Conf)]),
+	lists:sort(filelib:wildcard(maps:get(podcast_dir, Conf) ++
 								"/**/*.mp3")).
 
 podcast_process({Conf, OldState}) ->
