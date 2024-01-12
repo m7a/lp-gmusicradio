@@ -40,8 +40,8 @@ main_read_config() ->
 		min_good_perc   => 30,
 		default_rating  => 60
 	},
-	case file:read_file_info(ConfFile) of
-	{ok, _FileInfo} ->
+	case file_exists(ConfFile) of
+	true ->
 		% Config File <gmusicradio podcast_conf="/data/program..." .../>
 		{Element, _} = xmerl_scan:file(ConfFile),
 		{gmusicradio, NewConf, _} = xmerl_lib:simplify_element(Element),
@@ -57,9 +57,16 @@ main_read_config() ->
 				end
 			end
 		end, ConfDefault);
-	{error, enoent} ->
+	false ->
 		% Use defaults if conf file absent
 		ConfDefault
+	end.
+
+file_exists(File) ->
+	case file:read_file_info(File) of
+	{ok, _FileInfo} -> true;
+	{error, enoent} -> false
+	% other cases are special and reported as errors here!
 	end.
 
 % Endless loop processing
@@ -108,25 +115,36 @@ database_line(_Line, {await_eof, List, Keys}) ->
 	{await_eof, List, Keys}.
 
 database_convert_store(DefaultRating, L) ->
-	Idx = binary_to_integer(database_keyfind(<<"idx">>, L)),
-	ets:insert(gmusicradio_songs, #song{
-		idx=Idx,
-		path=filename:join(database_keyfind(<<"path">>, L),	
+	Idx  = binary_to_integer(database_keyfind(<<"idx">>, L)),
+	Path = filename:join(database_keyfind(<<"path">>, L),
 					database_keyfind(<<"file">>, L)),
-		description=io_lib:format("~s ~s ~s (~s)", [
-			database_utf8p(10, database_keyfind(<<"artist">>, L)),
-			database_utf8p(20, database_keyfind(<<"album">>,  L)),
-			database_utf8p(20, database_keyfind(<<"title">>,  L)),
-			database_utf8p( 4, database_keyfind(<<"year">>,   L))
-		]),
-		lastplay=binary_to_integer(database_keyfind(<<"lastplay">>, L)),
-		playcount=binary_to_integer(
+	case file_exists(Path) of
+	true ->
+		ets:insert(gmusicradio_songs, #song{
+			idx=Idx,
+			path=Path,
+			description=io_lib:format("~s ~s ~s (~s)", [
+				database_utf8p(10,
+					database_keyfind(<<"artist">>, L)),
+				database_utf8p(20,
+					database_keyfind(<<"album">>,  L)),
+				database_utf8p(20,
+					database_keyfind(<<"title">>,  L)),
+				database_utf8p( 4,
+					database_keyfind(<<"year">>,   L))
+			]),
+			lastplay=binary_to_integer(
+					database_keyfind(<<"lastplay">>, L)),
+			playcount=binary_to_integer(
 					database_keyfind(<<"playcount">>, L)),
-		rating=case database_keyfind(<<"rating">>, L) of
-			<<>>  -> DefaultRating;
-			Value -> binary_to_integer(Value)
-		end
-	}).
+			rating=case database_keyfind(<<"rating">>, L) of
+				<<>>  -> DefaultRating;
+				Value -> binary_to_integer(Value)
+			end
+		});
+	false ->
+		ignored
+	end.
 
 database_keyfind(Key, List) ->
 	{_K, Value} = lists:keyfind(Key, 1, List),
