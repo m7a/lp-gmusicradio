@@ -74,14 +74,14 @@ earlier times due to multiple favorable circumstances:
    here. Finally, buying used CDs is quite cheap as in e.g. 3.00€/disc for a
    typical second-hand CD as sold on Medimops. Used CDs do not usually have
    any lower audio quality given the digital nature of music CDs. In my use,
-   about 5 of 3000 songs had reading issues, this is less than 0.2%.
+   5 in 3000 songs had reading issues, this is less than 0.2%.
 
 A lucky way to bootstrap a collection from almost zero (1 CD + a few FLACs from
 Qobuz) was the opportunity to start from a stranger's music collection for free.
 He told me that he no longer owned any playback equipment for CDs and that they
 had been sitting in the basement for years. Sometimes, collections from similar
-situations are also sold, but given their often strong emotional value to the
-owners, they often do not exactly offer good value for the money.
+situations are also offered for sale, but given their often strong emotional
+value to the owners, they often do not exactly offer good value for the money.
 
 ## The Quest for Playback Software
 
@@ -120,9 +120,11 @@ now but they apparently aren't:
       I agree with the the separation concerns and like to add that in my
       opinion, music file contents should basically never be changed after
       being recorded from the CD as to avoid accidentially re-encoding them
-      which may incur a loss of quality. I also agree that this data should be
-      kept closely to the files as to allow sharing this data between
-      multiple devices and playback applications.
+      which may incur a loss of quality. Additionally, these files can be large
+      (tens of megabytes) and should not be re-written on a whim because this
+      needlessly loads the incremental backup software. I agree that this
+      metadata should be kept closely to the files as to allow sharing this data
+      between multiple devices and playback applications.
    There seems to be a proprietary extension to the M3U playlist format that
    puts rating information into the _playlist_. This does not really sound
    convincing, either, but seems to be the closest thing to an existing external
@@ -138,17 +140,27 @@ now but they apparently aren't:
  * Gapless playback seems to follow a similar fate: I would have expected this
    feature to be available everywhere but only selected applications implement
    it. Luckly, it does not matter much to my use case.
+ * Loudness normalization is still hard to understand and not even supported by
+   all of the applications. The difficulty in understanding its effect on the
+   playback quality lead me to skip on this feature for now. I keep adjusting
+   the volume on the hardware side for now, but it came as a surprise that this
+   feature is neither standard nor exactly easy to understand if present.
  * Playlist generation still is not really automated. In the old days I recall
-   that playback software expected you to create the playlists that you wanted
-   to play and then provided an in-order playback and a shuffle mode where
-   shuffle would play all of the playlist entries exactly once but in random
-   order. This still seems to be the only part that all applications support.
-   Improvements beyond that are rare and insufficient for my use cases:
+   that playback software expected you to curate the playlists that you wanted
+   to play (by hand) and then provided an in-order playback and a shuffle mode
+   where shuffle would play all of the playlist entries exactly once but in
+   random order. This still seems to be the only part that all applications
+   support. Improvements beyond that are rare and insufficient for my use cases:
     * Many players support the usage of rules to select the songs in the
       playlist. If the user maintains accurate enough tags and ratings for their
       entire collection, these allow subsets to be selected programatically.
+      This runs counter to my usage pattern where I either want it to be fully
+      automatic or become the DJ and select all the songs from a spontaneous
+      intuition explicitly.
     * Some players integrate with external services (last.fm?) to allow
       for computing a _sensible next choice_ after a given song was played.
+      This is only OK if you agree to tell the web service of choice about your
+      (very personal) favorite song choices which I decided not to opt into yet.
     * Very few players support advanced features like a random playback with the
       probability weightened by user-selected factors such as rating, number of
       times played, last playback etc.
@@ -156,7 +168,10 @@ now but they apparently aren't:
    feature provided by any of the common player applications. Some players
    offer _podcast_ support that could in theory be used to construct such a
    feature but even if podcasts are supported, it is expected that the user
-   manually manages the interaction between music and podcast playback.
+   manually manages the interaction between music and podcast playback. I did
+   not find any feature that encodes the semantics of “If a new podcast episode
+   appears _while playing music_ then instead of the next song, play that
+   episode” which would be a perfect fit for news playback...
 
 I checked the following playback applications to see whether they would suit
 my unusual requirements (see points before):
@@ -209,7 +224,7 @@ them so far. This list of links is mostly for my own notetaking :)
    cup of tea due to its behaviour of writing rating information directly to
    the song files.
  * <https://github.com/strawberrymusicplayer/strawberry>
- * MPD ecosystem -- there is a whole slew of programs related to the
+ * MPD ecosystem -- there is a whole ecosystem of programs related to the
    _Music Player Daemon_. The general idea of MPD is to separate the playback
    and database as a server (MPD) from the GUI (client).
    See <https://mpd.readthedocs.io/en/stable/user.html> and for the clients:
@@ -330,12 +345,13 @@ directory. The following shows a file equivalent of the default settings:
 	cmd_timeout="10000"
 	schedule_len="60"
 	chaos_factor="2.0"
+	initial_factor="0.5"
 	min_good_perc="30"
 	default_rating="60"
 />
 ~~~
 
-If any of the attributes is left out, its default value is used. For the
+If any of the attributes are left out, their default values are used. For the
 `gmbrc`, the default is not actually `/home/linux-fan` but rather the user's
 home directory hence the minimum options that need to be adjusted to your
 installation are `podcast_conf` and `podcast_dir`, all other values can
@@ -453,6 +469,20 @@ for user adjustments.
     be played even if they are not due for this yet per their play counts. This
     may increase the perceived randomness of the playlist. In many cases, the
     default of 2.0 should be OK.
+`initial_factor`
+:   The algorithm works by merging multiple shuffled lists. If this were to be
+    executed in a purely “correct” manner, the result playlist would always
+    start with one song for each rating. This overrepresents very nice (5 star)
+    and very badly rated (2 star) songs by adding one of each to the beginning
+    of the playlist. As a work around, this factor tricks the system into
+    believing that it has already added at least one (or by default “half of a”)
+    song of each rating to the playlist. Set this to 0 to disable this
+    workaround. Set it to one to suggest to the system that one song has already
+    been added for reach rating. Never set it to a higher number than the
+    number of songs in the most rarely set rating group (unless you want to
+    distort your playlist in funny ways like e.g. playing that rating group
+    after all other songs and only if playlist size is close to the total number
+    of songs).
 `min_good_perc`
 :   When the music collection contains many songs with rating of 3 stars or less
     which is e.g. expected when it is sourced from many albums that often
@@ -480,14 +510,15 @@ for user adjustments.
     set it to the same value as in gmusicbrowser (in my case that is 3 stars
     corresponding value 60) but you can of course also deviate to achieve
     different playback between gmusicbrowser and gmusicradio. The value could
-    in theory be automatically retrieved from the `gmbrc` but this is currenlty
-    not implemented.
+    in the future be automatically retrieved from the `gmbrc` but this is
+    currenlty not implemented.
 
 Example Output
 ==============
 
-The following shows a truncated output of running gmusicradio.
-Some of the details about the output format are explained in this section.
+The following shows a truncated output of running gmusicradio with
+configuration `initial_factor="0.0"`. Some of the details about the output
+format are explained in this section.
 
 ~~~
 $ gmusicradio.erl
@@ -600,6 +631,12 @@ specific position after the news playback.
 
 The script can serve as an additional inspiration for users intending to perform
 their own gmusicbrowser automation.
+
+File `print_albums.erl` contains a subset of the gmusicradio code to print out
+a listing of all different album titles found in the gmbrc. This is a hack that
+I used to check whether my CD collection was (loosely) in sync with the
+gmusicbrowser database -- gmusicbrowser itself does not seem to offer any
+export.
 
 Future Directions
 =================

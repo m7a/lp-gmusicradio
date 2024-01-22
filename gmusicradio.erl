@@ -37,6 +37,7 @@ main_read_config() ->
 		cmd_timeout     => 10000,
 		schedule_len    => 60,
 		chaos_factor    => 2.0,
+		initial_factor  => 0.5,
 		min_good_perc   => 30,
 		default_rating  => 60
 	},
@@ -171,9 +172,10 @@ database_utf8p(Pad, Str) ->
 % repeated execution of the same algorithm always yields diverse playlists.
 
 schedule_compute(Conf) ->
-	MinGoodPerc = maps:get(min_good_perc, Conf),
-	ChaosFactor = maps:get(chaos_factor,  Conf),
-	ScheduleLen = maps:get(schedule_len,  Conf),
+	MinGoodPerc   = maps:get(min_good_perc,  Conf),
+	ChaosFactor   = maps:get(chaos_factor,   Conf),
+	InitialFactor = maps:get(initial_factor, Conf),
+	ScheduleLen   = maps:get(schedule_len,   Conf),
 	% unclear why select_count did not return the intended output here?
 	Count1 = length(ets:select(gmusicradio_songs,
 						schedule_construct_match(0))),
@@ -205,11 +207,11 @@ schedule_compute(Conf) ->
 		schedule_shuffle(ChaosFactor, Group4, Duplicate),
 		schedule_shuffle(ChaosFactor, Group3, 1),
 		schedule_shuffle(ChaosFactor, Group2, 1)
-	], ScheduleLen),
+	], ScheduleLen, InitialFactor),
 	io:fwrite("Schedule of ~w songs:~n", [length(Schedule)]),
 	lists:foreach(fun(ID) ->
 			[Entry] = ets:lookup(gmusicradio_songs, ID),
-			io:fwrite("I~5w R~w C~5w ~s~n", [Entry#song.idx,
+			io:fwrite("I~5w R~3w C~4w ~s~n", [Entry#song.idx,
 				Entry#song.rating, Entry#song.playcount,
 				Entry#song.description])
 		end, Schedule),
@@ -230,10 +232,12 @@ schedule_shuffle(ChaosFactor, Group, Duplicate) ->
 		)]
 	end, lists:seq(1, Duplicate))).
 
-schedule_merge(Groups, Limit) ->
+schedule_merge(Groups, Limit, InitialFactor) ->
 	NonEmptyGroups = lists:filter(fun (X) -> X /= [] end, Groups),
 	schedule_merge_annotated([], Limit, lists:zipwith(fun(Group, ID) ->
-			{ 0.0, ID, 0, length(Group), Group }
+			LGroup = length(Group),
+			% Perc (“0.0”),         ID, Num, Of,     Group
+			{ InitialFactor/LGroup, ID, 0,   LGroup, Group }
 		end, NonEmptyGroups, lists:seq(1, length(NonEmptyGroups)))).
 
 schedule_merge_annotated(Schedule, _Limit, []) ->
