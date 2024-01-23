@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project default="build">
+
+<!-- APPLICATION METADATA -->
+<property name="masysma.target" value="_"/> 
+<property name="mdpc.name"      value="mdvl-gmusicradio"/>
+<property name="mdpc.section"   value="sound"/>
+<property name="mdpc.descrs"
+	value="Playlist generator and podcast player for gmusicbrowser"/>
+<property name="mdpc.arch"      value="all"/>
+<property name="mdpc.depends"   value="erlang-base, erlang-xmerl"/>
+<property name="mdpc.descrl">
+ This package provides `gmusicradio.erl` -- a script that can be used to
+ control the playback of a running gmusicbrowser instance in a radio-inspired
+ way but for personal listening on a local Linux machine.
+ .
+ The primary playback principle is to prefer new podcast episodes as they come
+ online while the application is running. Outside of that, music is played back
+ with highly rated songs being interleaved with less-highly rated songs.
+ .
+ Once started, gmusicradio runs in parallel to gmusicbrowser and automatically
+ enqueues new songs to play as the playback in gmusicbrowser continues.
+ .
+ See /usr/share/doc/mdvl-gmusicradio/README.md for the complete documentation.
+</property>
+<property name="mdpc.file.install">
+gmusicradio.erl /usr/bin
+README-draft.md /usr/share/doc/mdvl-gmusicradio
+</property>
+
+<!-- CI INTEGRATION -->
+<target name="autoci" depends="autopackage"/>
+
+<!-- CONSTANT TPL IMPORT -->
+<property environment="env"/>
+<condition property="masysma.internal.includepath.rel" value="${env.MDVL_CI_PHOENIX_ROOT}" else=".."><isset property="env.MDVL_CI_PHOENIX_ROOT"/></condition>
+<property name="masysma.internal.includepath" location="${masysma.internal.includepath.rel}"/>
+<property name="masysma.internal.loadpath" value="${masysma.internal.includepath}/co-build/ant-build-template.xml"/>
+<condition property="masysma.internal.load" value="file://${masysma.internal.loadpath}" else="https://raw.githubusercontent.com/m7a/co-build/master/ant-build-template.xml"><resourceexists><file file="${masysma.internal.loadpath}"/></resourceexists></condition>
+<import><url url="${masysma.internal.load}"/></import>
+
+</project>

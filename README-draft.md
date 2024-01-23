@@ -325,8 +325,6 @@ Setup the configuration of gmusicradio (see section _Configuration_) and then
 run the script as `./gmusicradio.erl`. You can also build a Debian package
 for it by running `ant package`.
 
-_TODO PROVIDE THESE PACKAGE BUILD INSTRUCTIONS_
-
 Configuration
 =============
 
