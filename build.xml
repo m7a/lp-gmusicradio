@@ -10,9 +10,9 @@
 <property name="mdpc.arch"      value="all"/>
 <property name="mdpc.depends"   value="erlang-base, erlang-xmerl"/>
 <property name="mdpc.descrl">
- This package provides `gmusicradio.erl` -- a script that can be used to
- control the playback of a running gmusicbrowser instance in a radio-inspired
- way but for personal listening on a local Linux machine.
+ This package provides `gmusicradio` -- a script that can be used to control the
+ playback of a running gmusicbrowser instance in a radio-inspired way but for
+ personal listening on a local Linux machine.
  .
  The primary playback principle is to prefer new podcast episodes as they come
  online while the application is running. Outside of that, music is played back
@@ -24,7 +24,7 @@
  See /usr/share/doc/mdvl-gmusicradio/README.md for the complete documentation.
 </property>
 <property name="mdpc.file.install">
-gmusicradio.erl /usr/bin
+gmusicradio /usr/bin
 README-draft.md /usr/share/doc/mdvl-gmusicradio
 </property>
 
