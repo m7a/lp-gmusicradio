@@ -12,12 +12,31 @@
 main([]) ->
 	io:fwrite("Ma_Sys.ma gmusicradio 1.0.0 (c) " ++
 					"2024 Ma_Sys.ma <info@masysma.net>~n"),
-	Conf = main_read_config(),
-	database_read(maps:get(gmbrc, Conf), maps:get(default_rating, Conf)),
+	Conf = main_init_get_conf(fun database_description_default/1),
 	main_loop(Conf, playback_init(schedule_compute(Conf),
 				maps:get(cmd_timeout, Conf)), 1,
 			podcast_init(Conf)),
-	ets:delete(gmusicradio_songs).
+	ets:delete(gmusicradio_songs);
+main(["--play"]) ->
+	main([]);
+main(["--list-albums"]) ->
+	main_init_get_conf(fun database_description_album/1),
+	print_songs(),
+	ets:delete(gmusicradio_songs);
+main(["--m3u", OutputFile]) ->
+	Conf = main_init_get_conf(fun database_description_default/1),
+	export_playlist(Conf, OutputFile),
+	ets:delete(gmusicradio_songs);
+main(_Other) ->
+	io:fwrite("Usage $0 [--play|--list-albums|--m3u OUTPUT]~n").
+
+main_init_get_conf(FDesc) ->
+	io:fwrite("Ma_Sys.ma gmusicradio 1.1.0 (c) " ++
+					"2024 Ma_Sys.ma <info@masysma.net>~n"),
+	Conf = main_read_config(),
+	database_read(maps:get(gmbrc, Conf),
+					maps:get(default_rating, Conf), FDesc),
+	Conf.
 
 main_read_config() ->
 	{ok, UserHome} = init:get_argument(home),
@@ -88,7 +107,7 @@ main_loop(Conf, PlaybackState={await, _, _, _}, Ctr, PodcastState) ->
 % Reads the songs, ratings and play counts from the GMBRC and stores them in ets
 % table `gmusicradio_songs` by idx key.
 
-database_read(GMBRC, DefaultRating) ->
+database_read(GMBRC, DefaultRating, FDesc) ->
 	io:fwrite("Read GMBRC... "),
 	{ok, RawDataBinary} = file:read_file(GMBRC),
 	{await_eof, Lines, _Keys} = lists:foldl(fun database_line/2,
@@ -96,8 +115,8 @@ database_read(GMBRC, DefaultRating) ->
 			binary:split(RawDataBinary, <<"\n">>, [global, trim])),
 	ets:new(gmusicradio_songs, [set, named_table, {keypos, #song.idx}]),
 	lists:foreach(fun(Line) ->
-				database_convert_store(DefaultRating, Line)
-			end, Lines),
+			database_convert_store(DefaultRating, Line, FDesc)
+		end, Lines),
 	io:fwrite("OK~n").
 
 database_line(<<"[Songs]">>, {await_marker, invalid, invalid}) ->
@@ -115,7 +134,7 @@ database_line(CSV, {process_contents, Tail, Keys}) ->
 database_line(_Line, {await_eof, List, Keys}) ->
 	{await_eof, List, Keys}.
 
-database_convert_store(DefaultRating, L) ->
+database_convert_store(DefaultRating, L, FDesc) ->
 	Idx  = binary_to_integer(database_keyfind(<<"idx">>, L)),
 	Path = filename:join(database_keyfind(<<"path">>, L),
 					database_keyfind(<<"file">>, L)),
@@ -124,16 +143,7 @@ database_convert_store(DefaultRating, L) ->
 		ets:insert(gmusicradio_songs, #song{
 			idx=Idx,
 			path=Path,
-			description=io_lib:format("~s ~s ~s (~s)", [
-				database_utf8p(10,
-					database_keyfind(<<"artist">>, L)),
-				database_utf8p(20,
-					database_keyfind(<<"album">>,  L)),
-				database_utf8p(20,
-					database_keyfind(<<"title">>,  L)),
-				database_utf8p( 4,
-					database_keyfind(<<"year">>,   L))
-			]),
+			description=FDesc(L),
 			lastplay=binary_to_integer(
 					database_keyfind(<<"lastplay">>, L)),
 			playcount=binary_to_integer(
@@ -146,6 +156,19 @@ database_convert_store(DefaultRating, L) ->
 	false ->
 		ignored
 	end.
+
+database_description_default(L) ->
+	io_lib:format("~s ~s ~s (~s)", [
+			database_utf8p(10, database_keyfind(<<"artist">>, L)),
+			database_utf8p(20, database_keyfind(<<"album">>,  L)),
+			database_utf8p(20, database_keyfind(<<"title">>,  L)),
+			database_utf8p( 4, database_keyfind(<<"year">>,   L))]).
+
+database_description_album(L) ->
+	io_lib:format("~s (~s) ~s", [
+			database_utf8p(20, database_keyfind(<<"artist">>, L)),
+			database_utf8p( 4, database_keyfind(<<"year">>,   L)),
+			database_utf8p(30, database_keyfind(<<"album">>,  L))]).
 
 database_keyfind(Key, List) ->
 	{_K, Value} = lists:keyfind(Key, 1, List),
@@ -366,6 +389,49 @@ podcast_process({Conf, OldState}) ->
 		playback_enqueue_file(PlayFile, maps:get(cmd_timeout, Conf))
 	end,
 	{Conf, NewState}.
+
+%-----------------------------------------------------------------[ Printing ]--
+% Can be used to print a list of all albums in the collection
+
+print_songs() ->
+	Sorted = lists:usort(lists:map(fun(S) -> S#song.description end,
+			ets:select(gmusicradio_songs, ets:fun2ms(
+				fun(X) when X#song.rating > 10 -> X end)))),
+	lists:foreach(fun(Descr) -> io:fwrite("~s~n", [Descr]) end, Sorted).
+
+%------------------------------------------------------[ Playlist Generation ]--
+% Can be used to export a (up to 100k song entries) playlist generated just
+% like the regular schedule. It is then suitable for copying to another device
+
+export_playlist(Conf, OutputFile) ->
+	PlayList = schedule_compute(maps:put(schedule_len, 100000, Conf)),
+	io:fwrite("Detecting Prefix...~n"),
+	[PlayListH|_T] = PlayList,
+	[EL0] = ets:lookup(gmusicradio_songs, PlayListH),
+	Prefix = ets:foldl(fun(EL, Acc) ->
+			LongestPrefix = binary:longest_common_prefix(
+							[EL#song.path, Acc]),
+			case LongestPrefix < byte_size(Acc) of
+			true  -> binary_part(Acc, {0, LongestPrefix});
+			false -> Acc
+			end
+		end, EL0#song.path, gmusicradio_songs),
+	PrefixLength = byte_size(Prefix),
+	io:fwrite("Prefix is >~s<~n", [Prefix]),
+	io:fwrite("Export to >~s<~n", [OutputFile]),
+	file:write_file(OutputFile, lists:join("",
+		["#EXTM3U\n#EXTENC:UTF-8\n#PLAYLIST:Gmusicradio\n"|
+		lists:map(fun(ID) ->
+			[S] = ets:lookup(gmusicradio_songs, ID),
+			RemLen = byte_size(S#song.path) - PrefixLength,
+			RelPath = binary_part(S#song.path,
+							{PrefixLength, RemLen}),
+			io_lib:format("# I~5w R~3w C~4w ~s~n" ++
+						"#EXT-X-RATING:~w~n~s~n",
+			[S#song.idx, S#song.rating, S#song.playcount,
+				S#song.description, floor(S#song.rating / 20),
+				RelPath])
+		end, PlayList)])).
 
 %-------------------------------------------------------[ Subprocess Library ]--
 % Enables the spawning of a subprocess with checking its output and return code
