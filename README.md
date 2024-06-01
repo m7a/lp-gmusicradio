@@ -35,13 +35,13 @@ music in any way. Specifically, some much-liked music may disappear overnight
 from the service if they decide to no longer license it (or are forced to remove
 it for whatever reason).
 
-Unlike public radio which can be received freely in Germany, most streaming
-services cost a monthly fee or deliver an excessive number of ads in addition
-to making mony from the user data by means of analytics. Ads are an issue with
-(especially privately-owned) radio stations, too, but data protection issues
-like tracking and analytics are of no concern to radio listeners. Effectively,
-swichting to streaming would have meant to incur a monthly fee for licensing
-the high-quality no-ads offering.
+Unlike public radio which are covered by _Rundfunkbeitrag_ in Germany, most
+streaming services cost a monthly fee or deliver an excessive number of ads in
+addition to making money from the user data by means of analytics. Ads are an
+issue with (especially privately-owned) radio stations, too, but data protection
+issues like tracking and analytics are of no concern to radio listeners.
+Effectively, swichting to streaming would have meant to incur a monthly fee for
+licensing the high-quality no-ads offering.
 
 While this would have certainly been a valid means to upgrade from the “free”
 radio listening experience, it would have also meant to spend a fixed amount
@@ -72,9 +72,9 @@ earlier times due to multiple favorable circumstances:
    copy CDs and add the necessary metadata in one step. I already owned the
    necessary CD drives due to the fact that I keep multiple “old” PCs around
    here. Finally, buying used CDs is quite cheap as in e.g. 3.00€/disc for a
-   typical second-hand CD as sold on Medimops. Used CDs do not usually have
-   any lower audio quality given the digital nature of music CDs. In my use,
-   5 in 3000 songs had reading issues, this is less than 0.2%.
+   typical second-hand CD as sold on Medimops or Rebuy. Used CDs do not usually
+   have any lower audio quality given the digital nature of music CDs. In my
+   use, 5 in 3000 songs had reading issues, this is less than 0.2%.
 
 A lucky way to bootstrap a collection from almost zero (1 CD + a few FLACs from
 Qobuz) was the opportunity to start from a stranger's music collection for free.
@@ -109,7 +109,7 @@ now but they apparently aren't:
       database format (luckily often text files or SQLite) that is not
       interoperable with other programs and also typically bound to the machine
       of operation e.g. by using absolute paths to the song files or something.
-      I count `mpd` among this, too.
+      I count `mpd` among those, too.
     * The storage of such data into the song files themselves.
       There seem to be strong opinions from two “camps” about this:
       In the one camp, people rightfully claim that the song files and
@@ -268,6 +268,17 @@ Hence even with this advanced feature, the integrated playback mechanism still
 seems to be insuficcient. Additionally, gmusicbrowser does not support news
 playback out of the box and a hacky attempt to bolt-on that feature works only
 partially (cf. `run_podget.sh`).
+
+Warning
+=======
+
+This repository provides a snapshot of what I did at the time. In the meantime
+I decided to pursue building my own player based on MPD and some of the ideas
+(algorithm and even code) provided in this repository.
+
+This also means that this repository's contents are likely to stay static after
+initial publication and may or may not work for your use case but are unlikely
+to get large fixes.
 
 Abstract
 ========
@@ -639,15 +650,9 @@ export.
 Future Directions
 =================
 
-There is still much to be learned regarding the properties of a multi-machine
-setup, playback on networked audio targets, audio volume normalization issues,
-optimizations in the playback based on the “contents” of the preceding song
-and better integration of news sources (note how the news are always delayed
-in the current setup). Also, it may be interesting to explore other player
-software (although data migration is immediately a concern).
-
-None of these things is easy to address, hence I expect this script to remain
-as-is for the beginning.
+Development efforts continue into the direction of using MPD with a customized
+client because this makes more sense for the more complex use cases that have
+become relevant in the meantime.
 
 See Also
 ========
@@ -665,3 +670,7 @@ mpv https://radiogroup-stream32.radiohost.de/radio-frankfurt_mp3-192
 mpv http://streams.radiobob.de/bob-wacken/mp3-192/streams.radiobob.de/
 mpv --cache=yes --cache-secs=4 --demuxer-max-bytes=$((1024 * 1024 * 10)) http://motherearth.streamserver24.com:18910/motherearth.klassik
 ~~~
+
+## Ma_Sys.ma pages related to Music Playback
+
+ * [aes67_audio_notes(37)](../37/aes67_audio_notes.xhtml)

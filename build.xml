@@ -25,7 +25,7 @@
 </property>
 <property name="mdpc.file.install">
 gmusicradio /usr/bin
-README-draft.md /usr/share/doc/mdvl-gmusicradio
+README.md /usr/share/doc/mdvl-gmusicradio
 </property>
 
 <!-- CI INTEGRATION -->

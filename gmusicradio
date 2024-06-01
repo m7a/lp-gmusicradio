@@ -10,8 +10,6 @@
 % the-fly to continue playback.
 
 main([]) ->
-	io:fwrite("Ma_Sys.ma gmusicradio 1.0.0 (c) " ++
-					"2024 Ma_Sys.ma <info@masysma.net>~n"),
 	Conf = main_init_get_conf(fun database_description_default/1),
 	main_loop(Conf, playback_init(schedule_compute(Conf),
 				maps:get(cmd_timeout, Conf)), 1,
