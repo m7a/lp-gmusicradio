@@ -641,11 +641,9 @@ specific position after the news playback.
 The script can serve as an additional inspiration for users intending to perform
 their own gmusicbrowser automation.
 
-File `print_albums.erl` contains a subset of the gmusicradio code to print out
-a listing of all different album titles found in the gmbrc. This is a hack that
-I used to check whether my CD collection was (loosely) in sync with the
-gmusicbrowser database -- gmusicbrowser itself does not seem to offer any
-export.
+There are additional parameters to `gmusicradio` that can be used to generate
+M3U playlists or print a list of all albums in the `gmbrc`. Refer to the
+script's source code for details.
 
 Future Directions
 =================
